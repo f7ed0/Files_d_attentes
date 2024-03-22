@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"symsys/random"
-	"symsys/simulator"
 
+	"github.com/f7ed0/Files_d_attentes/random"
+	"github.com/f7ed0/Files_d_attentes/simulator"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotutil"
 	"gonum.org/v1/plot/vg"
