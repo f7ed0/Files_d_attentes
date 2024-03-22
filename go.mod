@@ -1,4 +1,4 @@
-module symsys
+module github.com/f7ed0/Files_d_attentes
 
 go 1.20
 
