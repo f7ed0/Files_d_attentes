@@ -1,18 +1,24 @@
 package main
 
 import (
-	"fmt"
-	"math"
 	"math/rand"
 
 	"github.com/f7ed0/Files_d_attentes/random"
 	"github.com/f7ed0/Files_d_attentes/simulator"
-	"gonum.org/v1/plot"
-	"gonum.org/v1/plot/plotutil"
-	"gonum.org/v1/plot/vg"
 )
 
+
+
 func main() {
+	s1 := simulator.NewWaitingLine(2);
+	s1.SetArrivalTimeGenerator(arr2_1);
+	s1.SetServiceTimeGenerator(ser2_1,0)
+	s1.SetServiceTimeGenerator(ser2_2,1)
+	s1.SetQueueSize(simulator.QUEUE_INF)
+	sim := simulator.NewSimulation(1000,&s1)
+	sim.Run()
+	sim.TestRandomFunctions()
+	/*
 	s1 := simulator.NewWaitingLine()
 	s1.Generate_tmp_service = service1
 	s1.Generate_tmp_arrivee = arr1
@@ -46,7 +52,7 @@ func main() {
 
 	if err := p.Save(12*vg.Inch, 6*vg.Inch, "points.png"); err != nil {
 		panic(err)
-	}
+	}*/
 }
 
 func service1() float64{
@@ -70,4 +76,43 @@ func service2() float64 {
 
 func arr1() float64 {
 	return random.UniformRand(1/0.6 - 0.5, 1/0.6 + 0.5)
+}
+
+func fdens1(x float64) float64 {
+	if x <= 1 {
+		return 0
+	}
+	if x <= 2 {
+		return (2.0/3.0)*(x-1)
+	}
+	if x <= 4 {
+		return (1.0/3.0)*(4-x)
+	}
+	return 0
+}
+
+func arr2_1() float64 {
+	return random.RejectMethod(fdens1,1,4,2.0/3.0)
+}
+
+func ser2_1() float64 {
+	x := random.UniformRand(0,1);
+	if x < 0.6 {
+		return 4
+	}
+	if x < 0.9 {
+		return 3
+	}
+	return 2
+}
+
+func ser2_2() float64 {
+	x := random.UniformRand(0,1);
+	if x < 0.6 {
+		return 3
+	}
+	if x < 0.9 {
+		return 2
+	}
+	return 1
 }

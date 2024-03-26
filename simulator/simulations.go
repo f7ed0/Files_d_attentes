@@ -9,6 +9,7 @@ import (
 
 type Simulation struct {
 	WaitingLines		[]*WaitingLine
+
 	
 	T			float64
 	T_max		float64
@@ -16,8 +17,8 @@ type Simulation struct {
 	Q			int64
 	P			int64
 
-	Qgraph			plotter.XYs
-	Pgraph			plotter.XYs
+	Qgraph		plotter.XYs
+	Pgraph		plotter.XYs
 
 	T_moy		float64
 	T_att_moy	float64
@@ -36,14 +37,17 @@ func (s *Simulation) TestRandomFunctions() {
 	for i,wl := range s.WaitingLines {
 		sum := float64(0)
 		for j := 0 ; j < 10000 ; j++ {
-			sum += wl.Generate_tmp_arrivee()
+			sum += wl.generate_tmp_arrivee()
 		}
-		fmt.Printf("Tested mean for arr of wl %v : %v\n",i,sum/10000)
-		sum = 0
-		for j := 0 ; j < 10000 ; j++ {
-			sum += wl.Generate_tmp_service()
+		fmt.Printf("Tested mean for arr of wl %v : %v (1/E[α] : %v)\n",i,sum/10000,10000/sum)
+		for k := 0 ; k < wl.n_serv ; k++ {
+			sum = 0
+			for j := 0 ; j < 10000 ; j++ {
+				sum += wl.generate_tmp_service[k]()
+			}
+			fmt.Printf("Tested mean for service of server %v wl %v : %v (1/E[β] : %v)\n",k,i,sum/10000,10000/sum)
 		}
-		fmt.Printf("Tested mean for service of wl %v : %v\n\n",i,sum/10000)
+		fmt.Println()
 	}
 }
 
@@ -56,28 +60,28 @@ func (s *Simulation) Run() {
 	s.ShowHeader()
 	for s.GetFirstEventTime() <= s.T_max {
 		index := s.GetFirstEventIndex()
-		serv := s.WaitingLines[index]
-		if serv.t_arr < serv.t_dep { // Arrivée d'une piece
+		wl := s.WaitingLines[index]
+		if wl.t_arr < wl.GetFirstDeparture() { // Arrivée d'une piece
 			s.updateGraphs()
 			s.Q++
-			serv.q++
-			delta := serv.t_arr - s.T
-			s.T = serv.t_arr
+			wl.q++
+			delta := wl.t_arr - s.T
+			s.T = wl.t_arr
 
 			for _,wl := range s.WaitingLines {
 				wl.updateGraphs(s.T)
 				wl.CalcCumulatives(delta)
 			}
 
+			wl.t_arr = s.T + wl.generate_tmp_arrivee()
 
-			serv.t_arr = s.T + serv.Generate_tmp_arrivee()
-
-			if serv.working == 0 && serv.locked == 0 {
-				serv.working = 1
-				serv.t_dep = s.T + serv.Generate_tmp_service()
+			srv_index := wl.getFistServerNotBusy()
+			if srv_index >= 0 {
+				wl.working[srv_index] = 1
+				wl.t_dep[srv_index] = s.T + wl.generate_tmp_service[srv_index]()
 			} else {
-				if serv.queue.Size < serv.queue.MaxSize {
-					serv.queue.Size ++
+				if wl.queue.Size < wl.queue.MaxSize {
+					wl.queue.Size ++
 				} else {
 					fmt.Printf("====== queue OVERFLOW ======")
 					break
@@ -90,54 +94,60 @@ func (s *Simulation) Run() {
 			}
 		} else { // Départ d'une pièce
 			s.updateGraphs()
-			serv.p++
-			delta := serv.t_dep - s.T
-			s.T = serv.t_dep
+			srv_index := wl.getCurrentDeparturingServer(wl.GetFirstDeparture())
+			wl.p[srv_index]++
+			
+			delta := wl.t_dep[srv_index] - s.T
+			s.T = wl.t_dep[srv_index]
 
 			for _,wl := range s.WaitingLines {
 				wl.CalcCumulatives(delta)
 				wl.updateGraphs(s.T)
 			}
 
-			if serv.Next == nil || serv.Next.queue.Size < serv.Next.queue.MaxSize {
-				// Gestion serveur actuel
-				if serv.queue.Size > 0 {
-					serv.queue.Size --
-					serv.t_dep = s.T + serv.Generate_tmp_service()
-					if serv.Previous != nil && serv.Previous.locked == 1 {
-						if serv.Previous.queue.Size > 0 {
-							serv.Previous.queue.Size --
-							serv.Previous.working = 1
-							serv.Previous.t_dep = s.T + serv.Previous.Generate_tmp_service()
+			if wl.Next == nil || wl.Next.queue.Size < wl.Next.queue.MaxSize {
+				// Gestion wl actuel
+				if wl.queue.Size > 0 {
+					wl.queue.Size --
+					wl.t_dep[srv_index] = s.T + wl.generate_tmp_service[srv_index]()
+					if wl.Previous != nil {
+						psid := wl.Previous.getFistServerLocked()
+						if psid != 1 {
+							if wl.Previous.queue.Size > 0 {
+								wl.Previous.queue.Size --
+								wl.Previous.working[psid] = 1
+								wl.Previous.t_dep[psid] = s.T + wl.Previous.generate_tmp_service[psid]()
+							}
+							wl.Previous.locked[psid] = 0
+							wl.queue.Size ++
+							wl.q++
 						}
-						serv.Previous.locked = 0
-						serv.queue.Size ++
-						serv.q++
 					}
 				} else {
-					serv.working = 0
-					serv.t_dep = s.T_max + 1
+					wl.working[srv_index] = 0
+					wl.t_dep[srv_index] = s.T_max + 1
 				}
 
-				// Gestion Serveur next
-				if serv.Next != nil {
-					serv.Next.q ++
-					if serv.Next.queue.Size == 0 && serv.Next.working == 0 && serv.Next.locked == 0 {
-						serv.Next.working = 1
-						serv.Next.t_dep = s.T + serv.Next.Generate_tmp_service()
+				// Gestion wl next
+				if wl.Next != nil {
+					wl.Next.q ++
+					nsid := wl.Next.getFistServerNotBusy()
+					if wl.Next.queue.Size == 0 && nsid != 0 {
+						wl.Next.working[nsid] = 1
+						wl.Next.t_dep[nsid] = s.T + wl.Next.generate_tmp_service[nsid]()
 					} else {
-						serv.Next.queue.Size ++
+						wl.Next.queue.Size ++
 					}
 				}
-			} else if(serv.Next != nil) {
-				serv.locked = 1
-				serv.working = 0
-				serv.t_dep = s.T_max + 1
+			} else if(wl.Next != nil) {
+				wl.locked[srv_index] = 1
+				wl.working[srv_index] = 0
+				wl.t_dep[srv_index] = s.T_max + 1
 			} 
-			if (serv.Next == nil) {
+			if (wl.Next == nil) {
 				s.P++
 			}
-			s.ShowStat("DEP"+strconv.Itoa(index))
+			s.ShowStat("DEP"+strconv.Itoa(index)+"|"+strconv.Itoa(srv_index))
 			s.updateGraphs()
 			for _,wl := range s.WaitingLines {
 				wl.updateGraphs(s.T)
@@ -146,10 +156,11 @@ func (s *Simulation) Run() {
 	}
 
 	delta := s.T_max - s.T
-	//s.T = s.T_max
+	s.T = s.T_max
 	for _,wl := range s.WaitingLines {
 		wl.CalcCumulatives(delta)
 	}
+	s.ShowStat("END")
 
 	s.CalcAndDisplayResult();
 }
@@ -162,7 +173,7 @@ func (s Simulation) CalcAndDisplayResult() {
 		wl.CalcFinals(s.T_max)
 		s.T_cum += wl.T_cum
 		s.T_att_cum += wl.T_att_cum
-		s.T_occ += wl.T_occ
+		s.T_occ += sum(wl.T_occ)
 	}
 
 	s.T_moy = s.T_cum/float64(s.Q)
@@ -170,24 +181,27 @@ func (s Simulation) CalcAndDisplayResult() {
 	s.N_moy = s.T_cum/s.T_max
 	s.Taux_arr = float64(s.Q)/s.T_max
 
-	fmt.Printf("\n# ------------------------------------\n# Resultats de FIN de simulation\n# ------------------------------------\n");
-    fmt.Printf("# Periode de simulation : %.2f minutes\n", s.T_max);
-    fmt.Printf("# Nombre de pièces arrivees : %d\n", s.Q);
-    fmt.Printf("# Nombre de pièces produites : %d\n", s.P);
-	fmt.Printf("# [temps du dernier evenement simule avant t_max : %.2f]\n", s.T);
-	fmt.Printf("# Nombre moyen de pieces dans le systeme : \t%f\n", s.N_moy);
-    fmt.Printf("# Temps moyen de sejour passe par une piece : \t%f\n", s.T_moy);
-    fmt.Printf("# Temps moyen passe par une piece en attente : \t%f\n", s.T_att_moy);
+	fmt.Printf("\n# ---------------------------------------------------------------------------------\n# Resultats de FIN de simulation\n# ---------------------------------------------------------------------------------\n");
+    fmt.Printf("# Periode de simulation : \t\t\t\t%.2f minutes\n", s.T_max);
+    fmt.Printf("# Nombre de pièces arrivees : \t\t\t\t%d\n", s.Q);
+    fmt.Printf("# Nombre de pièces produites : \t\t\t\t%d\n", s.P);
+	fmt.Printf("# Temps du dernier evenement simule avant t_max : \t%.2f\n", s.T);
+	fmt.Printf("# Nombre moyen de pieces dans le systeme : \t\t%f\n", s.N_moy);
+    fmt.Printf("# Temps moyen de sejour passe par une piece : \t\t%f\n", s.T_moy);
+    fmt.Printf("# Temps moyen passe par une piece en attente : \t\t%f\n", s.T_att_moy);
 	
 	for i,wl := range s.WaitingLines {
 		fmt.Println("#")
-		fmt.Printf("# λ_%v (taux d'arrivee de pieces de %v) observe :  %f\n", i,i,wl.Taux_arr);
-		fmt.Printf("# Nombre de pièces en attente dans la file %d : %d\n", i, wl.queue.Size);
-		fmt.Printf("# Etat du serveur %d à t_max : %d (bloqué : %d)\n", i, wl.working,wl.locked);
-		fmt.Printf("# Pourcentage d'occupation du serveur %d : \t%.2f %%\n", i, wl.Taux_occ);
-		fmt.Printf("# Pourcentage de bloquage du serveur %d : \t%3.2f %%\n", i, wl.Taux_locked);
-		fmt.Printf("# µ_%d (taux de service du serveur %d) observe : %f\n", i, i, wl.Miu_obs);
+		fmt.Printf("# λ_%v (taux d'arrivee de pieces de %v) observe :  \t%f\n", i,i,wl.Taux_arr);
+		fmt.Printf("# Nombre de pièces en attente dans la file %d : \t\t%d\n", i, wl.queue.Size);
+		fmt.Printf("# Etat du serveur %d à t_max : \t\t\t\t%d (bloqué : %d)\n", i, wl.working,wl.locked);
+		fmt.Printf("# Pourcentage d'occupation du serveur %d : \t\t%.2f %%\n", i, wl.Taux_occ);
+		fmt.Printf("# Pourcentage d'occupation global du serveur %d : \t%.2f %%\n", i, wl.Taux_wl_occ);
+		fmt.Printf("# Pourcentage de bloquage du serveur %d : \t\t%3.2f %%\n", i, wl.Taux_locked);
+		fmt.Printf("# taux de service des serveurs %d observe : \t\t%f\n", i, wl.Miu_obs);
+		fmt.Printf("# µ_%d (taux de service global du serveur %d) observe : \t%f\n", i, i, wl.Miu_wl_obs);
 	}
+	fmt.Println("# ----------------------------------------------------------------------------------")
 }
 
 func (s Simulation) GetFirstEventTime() float64 {
@@ -228,7 +242,7 @@ func (s Simulation) ShowHeader() {
 func (s Simulation) ShowStat(msg string) {
 	fmt.Printf("%v\t%.2f\t|\t",msg,s.T)
 	for _,wl := range s.WaitingLines {
-		fmt.Printf("%v\t%v\t%v\t%v\t%v\t|\t",wl.working,wl.locked,wl.queue.Size,wl.q,wl.p)
+		fmt.Printf("%v\t%v\t%v\t%v\t%v\t|\t",sum_i(wl.working),sum_i(wl.locked),wl.queue.Size,wl.q,wl.p)
 	}
 	fmt.Printf("%v\t%v\t|\n",s.Q,s.P)
 }
@@ -244,6 +258,12 @@ func NewSimulation(t_max float64,WaitingLines ...*WaitingLine) Simulation {
 			wl.Next = WaitingLines[i+1]
 		}
 		WaitingLine_list = append(WaitingLine_list, wl)
+	}
+
+	for _,item := range WaitingLine_list {
+		for i := 0 ; i < item.n_serv ; i++ {
+			item.t_dep[i] = t_max+1
+		}
 	}
 
 	return Simulation{
